@@ -78,7 +78,7 @@ app.post('/api/info', apiLimiter, (req, res) => {
     }
 
     const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const ytDlp = spawn('yt-dlp', ['--dump-json', cleanUrl]);
+    const ytDlp = spawn(ytDlpBinary, ['--dump-json', cleanUrl]);
     
     let stdoutData = '';
     let stderrData = '';
@@ -157,7 +157,7 @@ app.get('/api/download', (req, res) => {
         ];
     }
 
-    const downloader = spawn('yt-dlp', args);
+    const downloader = spawn(ytDlpBinary, args);
 
     downloader.on('close', (code) => {
         const expectedFile = `${tempOutPath}.${type}`;
