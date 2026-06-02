@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>YouTube Video & MP3 Downloader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Block touch-based platform scaling gestures completely */
+        html, body {
+            touch-action: pan-x pan-y;
+            -webkit-text-size-adjust: 100%;
+            background-color: #ffffff;
+            color: #0f172a;
+        }
+        /* Classic web scrollbar for table containers */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans antialiased bg-slate-50">
+
+    <nav class="w-full bg-white border-b border-slate-200 py-4 px-6 mb-12">
+        <div class="max-w-5xl mx-auto flex items-center justify-between">
+            <span class="text-lg font-bold tracking-tight text-slate-900">VIDE</span>
+            <span class="text-xs text-slate-500 font-medium bg-slate-100 px-2.5 py-1 rounded-md">Web Utility v1.0</span>
+        </div>
+    </nav>
+
+    <main class="flex-grow w-full max-w-4xl mx-auto px-4 pb-16">
+        <div class="bg-white border border-slate-200 rounded-xl p-6 md:p-8 shadow-sm">
+            
+            <div class="mb-6">
+                <h1 class="text-2xl font-semibold text-slate-900">Download YouTube Media Assets</h1>
+                <p class="text-sm text-slate-500 mt-1">Convert and extract video tracks or high-quality audio formats directly from source servers.</p>
+            </div>
+
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input type="text" id="urlInput" placeholder="Paste YouTube URL link here (e.g., https://www.youtube.com/watch?v=... or https://youtu.be/...)" 
+                    class="flex-grow bg-white border border-slate-300 rounded-lg px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 text-sm transition-all" />
+                <button onclick="fetchMetadata()" id="actionBtn"
+                    class="bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm px-6 py-3 rounded-lg active:bg-slate-950 transition-colors shrink-0">
+                    Analyze Link
+                </button>
+            </div>
+
+            <div id="loader" class="hidden py-12 flex flex-col items-center justify-center space-y-2">
+                <div class="w-6 h-6 border-2 border-slate-300 border-t-slate-900 rounded-full animate-spin"></div>
+                <p class="text-xs text-slate-500 font-medium">Fetching available media formats...</p>
+            </div>
+
+            <div id="resultContainer" class="hidden mt-8 pt-8 border-t border-slate-200">
+                
+                <div class="flex flex-col sm:flex-row gap-4 items-start pb-6">
+                    <img id="videoThumb" class="w-full sm:w-48 rounded-lg object-cover aspect-video border border-slate-200 bg-slate-100" src="" alt="Video Preview">
+                    <div class="space-y-1">
+                        <h2 id="videoTitle" class="font-semibold text-base text-slate-900 leading-snug"></h2>
+                        <p id="videoDuration" class="text-xs font-mono text-slate-500"></p>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Available Download Formats</h3>
+                    
+                    <div class="border border-slate-200 rounded-lg overflow-hidden bg-white">
+                        <div class="hidden sm:flex bg-slate-50 border-b border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-500">
+                            <div class="w-1/2">Resolution / Track Type</div>
+                            <div class="w-1/6 text-center">Format</div>
+                            <div class="w-1/6 text-center">File Size</div>
+                            <div class="w-1/6 text-right">Action</div>
+                        </div>
+
+                        <div id="formatsList" class="divide-y divide-slate-200 max-h-96 overflow-y-auto custom-scrollbar">
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </main>
+
+    <footer class="w-full text-center py-6 border-t border-slate-200 text-xs text-slate-400 bg-white">
+        <p>&copy; VIDE Provided for legal, personal content archival purposes.</p>
+    </footer>
+
+    <script>
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && (e.key === '=' || e.key === '-' || e.key === '0')) {
+                e.preventDefault();
+            }
+        });
+
+        document.addEventListener('gesturestart', (e) => e.preventDefault());
+
+        async function fetchMetadata() {
+            const url = document.getElementById('urlInput').value.trim();
+            const loader = document.getElementById('loader');
+            const resultContainer = document.getElementById('resultContainer');
+            
+            if(!url) return alert('Please input a valid URL target before checking contents.');
+
+            loader.classList.remove('hidden');
+            resultContainer.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/info', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                const data = await response.json();
+                if(!response.ok) throw new Error(data.error || 'Server error reading format mapping.');
+
+                document.getElementById('videoThumb').src = data.thumbnail;
+                document.getElementById('videoTitle').textContent = data.title;
+                document.getElementById('videoDuration').textContent = `Length: ${data.duration}`;
+
+                const list = document.getElementById('formatsList');
+                list.innerHTML = '';
+
+                // Safe URL Title Parameter parsing configuration
+                const safeTitleParam = encodeURIComponent(data.title);
+
+                // Row Injection 1: High Quality Audio Extraction with embedded cover-art execution pathing
+                list.appendChild(createDataRow('Audio Only (Highest Quality)', 'MP3', 'Adaptive Size', `/api/download?url=${encodeURIComponent(url)}&formatId=bestaudio&type=mp3&title=${safeTitleParam}`));
+
+                // Row Injection 2: High Resolution structured MP4 listings
+                data.formats
+                    .filter(f => f.hasVideo && f.ext === 'mp4')
+                    .forEach(f => {
+                        const label = `Video Track — ${f.resolution} ${f.note ? `(${f.note})` : ''}`;
+                        const sizeMB = f.size ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : 'Variable';
+                        const downloadUrl = `/api/download?url=${encodeURIComponent(url)}&formatId=${f.formatId}&type=mp4&title=${safeTitleParam}`;
+                        list.appendChild(createDataRow(label, f.ext.toUpperCase(), sizeMB, downloadUrl));
+                    });
+
+                resultContainer.classList.remove('hidden');
+            } catch (err) {
+                alert(err.message);
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+        function createDataRow(label, format, size, link) {
+            const row = document.createElement('div');
+            row.className = 'flex flex-col sm:flex-row sm:items-center px-4 py-3.5 hover:bg-slate-50 transition-colors text-sm text-slate-700 gap-2 sm:gap-0';
+            row.innerHTML = `
+                <div class="w-full sm:w-1/2 font-medium text-slate-900 flex items-center gap-2">
+                    ${label}
+                </div>
+                <div class="w-full sm:w-1/6 sm:text-center">
+                    <span class="inline-block bg-slate-100 text-slate-600 text-xs font-mono font-semibold px-2 py-0.5 rounded border border-slate-200">${format}</span>
+                </div>
+                <div class="w-full sm:w-1/6 sm:text-center text-xs font-mono text-slate-500">
+                    ${size}
+                </div>
+                <div class="w-full sm:w-1/6 sm:text-right mt-1 sm:mt-0">
+                    <a href="${link}" target="_blank" class="inline-block bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold px-3 py-1.5 rounded border border-slate-300 shadow-sm transition-all active:scale-[0.98]">
+                        Download
+                    </a>
+                </div>
+            `;
+            return row;
+        }
+    </script>
+</body>
+</html>
