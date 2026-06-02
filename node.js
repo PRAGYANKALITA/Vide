@@ -76,20 +76,18 @@ app.post('/api/info', apiLimiter, (req, res) => {
 
     const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Pass User-Agent to match your browser session structure
+    // Explicitly declaring 'node' as the JS runtime mapping
     const infoArgs = [
         '--dump-json', 
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        '--js-runtimes', 'node',
         cleanUrl
     ];
     
-    // Check and add cookie integration
     const cookiePath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiePath)) {
         infoArgs.unshift('--cookies', cookiePath);
-        console.log('🍪 cookies.txt detected! Passing session tokens to yt-dlp.');
-    } else {
-        console.log('⚠️ Warning: cookies.txt not found in directory root.');
+        console.log('🍪 Passing cookies.txt and setting JS Runtime to Node.');
     }
 
     const ytDlp = spawn(ytDlpBinary, infoArgs);
@@ -102,12 +100,11 @@ app.post('/api/info', apiLimiter, (req, res) => {
 
     ytDlp.on('error', (err) => {
         console.error('Spawning failure:', err);
-        return res.status(500).json({ error: 'Missing system dependencies (yt-dlp/ffmpeg).' });
+        return res.status(500).json({ error: 'Missing system dependencies.' });
     });
 
     ytDlp.on('close', (code) => {
         if (code !== 0) {
-            console.error(`yt-dlp process failed with code ${code}`);
             console.error(`Detailed stderr logs: ${stderrData}`);
             const cleanError = stderrData.trim().split('\n').pop() || 'Unknown error.';
             return res.status(500).json({ error: `Extraction Failed: ${cleanError}` });
@@ -133,18 +130,18 @@ app.post('/api/info', apiLimiter, (req, res) => {
                 formats: formats
             });
         } catch (e) {
-            res.status(500).json({ error: 'Data serialization runtime error.' });
+            res.status(500).json({ error: 'Data serialization error.' });
         }
     });
 });
 
-// File build processing download endpoint
+// Download processing endpoint
 app.get('/api/download', (req, res) => {
     const { url, formatId, type, title } = req.query;
     const videoId = validateYoutubeUrl(url);
 
     if (!videoId || !formatId || !type) {
-        return res.status(400).send('Invalid file parsing payload parameters.');
+        return res.status(400).send('Invalid parsing parameters.');
     }
 
     const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -153,6 +150,7 @@ app.get('/api/download', (req, res) => {
     
     let args = [
         '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        '--js-runtimes', 'node'
     ];
 
     if (type === 'mp3') {
@@ -185,7 +183,6 @@ app.get('/api/download', (req, res) => {
         const expectedFile = `${tempOutPath}.${type}`;
 
         if (code !== 0 || !fs.existsSync(expectedFile)) {
-            console.error('Download processing failed or file not found.');
             if (!res.headersSent) {
                 res.status(500).send('Error compiling media files.');
             }
@@ -197,7 +194,7 @@ app.get('/api/download', (req, res) => {
 
         res.download(expectedFile, finalClientFilename, (err) => {
             fs.unlink(expectedFile, (unlinkErr) => {
-                if (unlinkErr) console.error('Error removing temporary cached item:', unlinkErr);
+                if (unlinkErr) console.error('Error removing temporary file:', unlinkErr);
             });
         });
     });
@@ -207,4 +204,4 @@ app.get('/api/download', (req, res) => {
     });
 });
 
-app.listen(PORT, () => console.log(`🔒 Secure Core serving on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🔒 Server active on port ${PORT}`));
