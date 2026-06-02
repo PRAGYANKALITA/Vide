@@ -1,214 +1,205 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>YouTube Video & MP3 Downloader</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        html, body {
-            touch-action: pan-x pan-y;
-            -webkit-text-size-adjust: 100%;
-            background-color: #ffffff;
-            color: #0f172a;
+const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const cors = require('cors');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Dynamic binary tracking depending on OS environment
+const ytDlpBinary = process.platform === 'win32' 
+    ? path.join(__dirname, 'yt-dlp.exe') 
+    : 'yt-dlp';
+
+// Ensure local temporary caching folders exist safely
+const tmpDir = path.join(__dirname, 'tmp');
+if (!fs.existsSync(tmpDir)) {
+    fs.mkdirSync(tmpDir, { recursive: true });
+}
+
+// Security Configuration
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+            "img-src": ["'self'", "https://i.ytimg.com", "data:"],
+            "script-src": ["'self'", "'unsafe-inline'", "https://cdn.tailwindcss.com"]
         }
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
+    }
+}));
+app.use(cors({ origin: '*' }));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 45,
+    message: { error: 'Too many requests. Please try again later.' }
+});
+
+// Robust URL parsing logic supporting youtube.com, shorts, embeds, and youtu.be links
+const validateYoutubeUrl = (urlStr) => {
+    try {
+        if (!urlStr) return null;
+        const url = new URL(urlStr);
+        if (url.hostname === 'youtu.be') {
+            return url.pathname.substring(1).split(/[?#]/)[0];
         }
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: #f1f5f9;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 3px;
-        }
-    </style>
-</head>
-<body class="min-h-screen flex flex-col font-sans antialiased bg-slate-50">
-
-    <nav class="w-full bg-white border-b border-slate-200 py-4 px-6 mb-12">
-        <div class="max-w-5xl mx-auto flex items-center justify-between">
-            <span class="text-lg font-bold tracking-tight text-slate-900">VIDE</span>
-            <span class="text-xs text-slate-500 font-medium bg-slate-100 px-2.5 py-1 rounded-md">Web Utility v1.0</span>
-        </div>
-    </nav>
-
-    <main class="flex-grow w-full max-w-4xl mx-auto px-4 pb-16">
-        <div class="bg-white border border-slate-200 rounded-xl p-6 md:p-8 shadow-sm">
-            
-            <div class="mb-6">
-                <h1 class="text-2xl font-semibold text-slate-900">Download YouTube Media Assets</h1>
-                <p class="text-sm text-slate-500 mt-1">Convert and extract video tracks or high-quality audio formats directly from source servers.</p>
-            </div>
-
-            <form id="analyzerForm" onsubmit="event.preventDefault(); fetchMetadata();" class="flex flex-col sm:flex-row gap-3">
-                <input type="text" id="urlInput" placeholder="Paste YouTube URL link here..." 
-                    class="flex-grow bg-white border border-slate-300 rounded-lg px-4 py-3 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 text-sm transition-all" />
-                <button type="submit" id="actionBtn"
-                    class="bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm px-6 py-3 rounded-lg active:bg-slate-950 transition-colors shrink-0">
-                    Analyze Link
-                </button>
-            </form>
-
-            <div id="errorBanner" class="hidden mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                <p class="text-xs font-bold uppercase tracking-wider text-red-600">Application Error Log</p>
-                <p id="errorText" class="text-sm text-red-700 mt-1 font-mono break-words"></p>
-            </div>
-
-            <div id="loader" class="hidden py-12 flex flex-col items-center justify-center space-y-2">
-                <div class="w-6 h-6 border-2 border-slate-300 border-t-slate-900 rounded-full animate-spin"></div>
-                <p class="text-xs text-slate-500 font-medium">Fetching available media formats...</p>
-            </div>
-
-            <div id="resultContainer" class="hidden mt-8 pt-8 border-t border-slate-200">
-                
-                <div class="flex flex-col sm:flex-row gap-4 items-start pb-6">
-                    <img id="videoThumb" class="w-full sm:w-48 rounded-lg object-cover aspect-video border border-slate-200 bg-slate-100" src="" alt="Video Preview">
-                    <div class="space-y-1">
-                        <h2 id="videoTitle" class="font-semibold text-base text-slate-900 leading-snug"></h2>
-                        <p id="videoDuration" class="text-xs font-mono text-slate-500"></p>
-                    </div>
-                </div>
-
-                <div class="mt-4">
-                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Available Download Formats</h3>
-                    
-                    <div class="border border-slate-200 rounded-lg overflow-hidden bg-white">
-                        <div class="hidden sm:flex bg-slate-50 border-b border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-500">
-                            <div class="w-1/2">Resolution / Track Type</div>
-                            <div class="w-1/6 text-center">Format</div>
-                            <div class="w-1/6 text-center">File Size</div>
-                            <div class="w-1/6 text-right">Action</div>
-                        </div>
-
-                        <div id="formatsList" class="divide-y divide-slate-200 max-h-96 overflow-y-auto custom-scrollbar">
-                        </div>
-                    </div>
-                </div>
-
-            </div>
-
-        </div>
-    </main>
-
-    <footer class="w-full text-center py-6 border-t border-slate-200 text-xs text-slate-400 bg-white">
-        <p>&copy; VIDE Provided for legal, personal content archival purposes.</p>
-    </footer>
-
-    <script>
-        window.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && (e.key === '=' || e.key === '-' || e.key === '0')) {
-                e.preventDefault();
+        if (url.hostname.includes('youtube.com')) {
+            if (url.pathname.includes('/shorts/')) {
+                return url.pathname.split('/shorts/')[1].split(/[?#]/)[0];
             }
+            return url.searchParams.get('v');
+        }
+        return null;
+    } catch (e) {
+        const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+        const match = urlStr.match(regex);
+        return match ? match[1] : null;
+    }
+};
+
+// Strips system illegal characters out of titles to make safe file downloads
+const sanitizeFilename = (title) => {
+    if (!title) return 'media';
+    return title.replace(/[/\\?%*:|"<>]/g, '-').replace(/\s+/g, '_');
+};
+
+// Metadata extraction endpoint
+app.post('/api/info', apiLimiter, (req, res) => {
+    const { url } = req.body;
+    const videoId = validateYoutubeUrl(url);
+
+    if (!videoId) {
+        return res.status(400).json({ error: 'Invalid or unsupported YouTube URL.' });
+    }
+
+    const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    
+    // Setup execution args dynamically depending on cookie existence
+    const infoArgs = ['--dump-json', cleanUrl];
+    const cookiePath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiePath)) {
+        infoArgs.unshift('--cookies', cookiePath);
+        console.log('🍪 Using cookies.txt for info extraction.');
+    }
+
+    const ytDlp = spawn(ytDlpBinary, infoArgs);
+    
+    let stdoutData = '';
+    let stderrData = '';
+
+    ytDlp.stdout.on('data', (data) => { stdoutData += data; });
+    ytDlp.stderr.on('data', (data) => { stderrData += data; });
+
+    ytDlp.on('error', (err) => {
+        console.error('Spawning failure:', err);
+        return res.status(500).json({ error: 'Missing system dependencies (yt-dlp/ffmpeg).' });
+    });
+
+    ytDlp.on('close', (code) => {
+        if (code !== 0) {
+            console.error(`yt-dlp failed with exit code ${code}`);
+            console.error(`Detailed stderr: ${stderrData}`);
+            const cleanError = stderrData.trim().split('\n').pop() || 'Unknown error fetching metadata.';
+            return res.status(500).json({ error: `YouTube Blocked Request: ${cleanError}` });
+        }
+        try {
+            const json = JSON.parse(stdoutData);
+            const formats = json.formats
+                .filter(f => f.vcodec !== 'none' || f.acodec !== 'none')
+                .map(f => ({
+                    formatId: f.format_id,
+                    ext: f.ext,
+                    resolution: f.resolution || `${f.height}p` || 'Audio Only',
+                    note: f.format_note || '',
+                    hasVideo: f.vcodec !== 'none',
+                    hasAudio: f.acodec !== 'none',
+                    size: f.filesize || f.filesize_approx || null
+                }));
+
+            res.json({
+                title: json.title,
+                thumbnail: json.thumbnail,
+                duration: json.duration_string,
+                formats: formats
+            });
+        } catch (e) {
+            res.status(500).json({ error: 'Data serialization runtime error.' });
+        }
+    });
+});
+
+// File build processing download endpoint
+app.get('/api/download', (req, res) => {
+    const { url, formatId, type, title } = req.query;
+    const videoId = validateYoutubeUrl(url);
+
+    if (!videoId || !formatId || !type) {
+        return res.status(400).send('Invalid file parsing payload parameters.');
+    }
+
+    const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const fileId = crypto.randomBytes(8).toString('hex');
+    const tempOutPath = path.join(tmpDir, `download_${fileId}`);
+    
+    let args = [];
+
+    if (type === 'mp3') {
+        args = [
+            '-q', '--no-warnings', 
+            '-f', 'ba', 
+            '-x', '--audio-format', 'mp3', 
+            '--embed-thumbnail', '--convert-thumbnails', 'jpg',
+            '-o', `${tempOutPath}.%(ext)s`, 
+            cleanUrl
+        ];
+    } else {
+        args = [
+            '-q', '--no-warnings', 
+            '-f', `${formatId}+ba/best`, 
+            '--merge-output-format', 'mp4', 
+            '-o', `${tempOutPath}.%(ext)s`, 
+            cleanUrl
+        ];
+    }
+
+    // Safely inject cookie routing if file exists inside Render environment
+    const cookiePath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiePath)) {
+        args.unshift('--cookies', cookiePath);
+    }
+
+    const downloader = spawn(ytDlpBinary, args);
+
+    downloader.on('close', (code) => {
+        const expectedFile = `${tempOutPath}.${type}`;
+
+        if (code !== 0 || !fs.existsSync(expectedFile)) {
+            console.error(`Download processing failed with exit code ${code}`);
+            if (!res.headersSent) {
+                res.status(500).send('Error compiling or conversions failed.');
+            }
+            return;
+        }
+
+        const secureTitleName = sanitizeFilename(title);
+        const finalClientFilename = `VIDE_${secureTitleName}.${type}`;
+
+        res.download(expectedFile, finalClientFilename, (err) => {
+            fs.unlink(expectedFile, (unlinkErr) => {
+                if (unlinkErr) console.error('Error removing temporary cached item:', unlinkErr);
+            });
         });
+    });
 
-        document.addEventListener('gesturestart', (e) => e.preventDefault());
+    req.on('close', () => {
+        downloader.kill();
+    });
+});
 
-        async function fetchMetadata() {
-            const urlInput = document.getElementById('urlInput');
-            const loader = document.getElementById('loader');
-            const resultContainer = document.getElementById('resultContainer');
-            const errorBanner = document.getElementById('errorBanner');
-            const errorText = document.getElementById('errorText');
-            
-            // FIX 1: Explicitly force mobile keyboard dismissal to unlock UI thread focus
-            urlInput.blur(); 
-
-            errorBanner.classList.add('hidden');
-            let url = urlInput.value.trim();
-            
-            if(!url) {
-                showMobileError('Please paste or input a valid URL target link first.');
-                return;
-            }
-
-            // Clean clean-up filter tracking mobile application parameters
-            const urlMatch = url.match(/https?:\/\/[^\s]+/);
-            if (urlMatch) { url = urlMatch[0]; }
-
-            loader.classList.remove('hidden');
-            resultContainer.classList.add('hidden');
-
-            try {
-                const response = await fetch('/api/info', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url })
-                });
-
-                // FIX 2: Check for raw string/HTML errors (e.g. 502/504 Bad Gateway) before running JSON serialization
-                const textData = await response.text();
-                let data;
-                try {
-                    data = JSON.parse(textData);
-                } catch(e) {
-                    throw new Error(`Server returned a non-JSON response. Your service might be restarting or hitting a temporary network block. (Status: ${response.status})`);
-                }
-
-                if(!response.ok) throw new Error(data.error || 'Server error reading format mapping.');
-
-                document.getElementById('videoThumb').src = data.thumbnail;
-                document.getElementById('videoTitle').textContent = data.title;
-                document.getElementById('videoDuration').textContent = `Length: ${data.duration}`;
-
-                const list = document.getElementById('formatsList');
-                list.innerHTML = '';
-
-                const safeTitleParam = encodeURIComponent(data.title);
-
-                // Row Injection 1: High Quality Audio Extraction
-                list.appendChild(createDataRow('Audio Only (Highest Quality)', 'MP3', 'Adaptive Size', `/api/download?url=${encodeURIComponent(url)}&formatId=bestaudio&type=mp3&title=${safeTitleParam}`));
-
-                // Row Injection 2: High Resolution structured MP4 listings
-                data.formats
-                    .filter(f => f.hasVideo && f.ext === 'mp4')
-                    .forEach(f => {
-                        const label = `Video Track — ${f.resolution} ${f.note ? `(${f.note})` : ''}`;
-                        const sizeMB = f.size ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : 'Variable';
-                        const downloadUrl = `/api/download?url=${encodeURIComponent(url)}&formatId=${f.formatId}&type=mp4&title=${safeTitleParam}`;
-                        list.appendChild(createDataRow(label, f.ext.toUpperCase(), sizeMB, downloadUrl));
-                    });
-
-                resultContainer.classList.remove('hidden');
-            } catch (err) {
-                showMobileError(err.message);
-            } finally {
-                loader.classList.add('hidden');
-            }
-        }
-
-        function showMobileError(msg) {
-            const errorBanner = document.getElementById('errorBanner');
-            const errorText = document.getElementById('errorText');
-            errorText.textContent = msg;
-            errorBanner.classList.remove('hidden');
-            errorBanner.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-
-        function createDataRow(label, format, size, link) {
-            const row = document.createElement('div');
-            row.className = 'flex flex-col sm:flex-row sm:items-center px-4 py-3.5 hover:bg-slate-50 transition-colors text-sm text-slate-700 gap-2 sm:gap-0';
-            
-            // FIX 3: Fixed 'actions:scale' syntax typo to 'active:scale'
-            row.innerHTML = `
-                <div class="w-full sm:w-1/2 font-medium text-slate-900 flex items-center gap-2">
-                    ${label}
-                </div>
-                <div class="w-full sm:w-1/6 sm:text-center">
-                    <span class="inline-block bg-slate-100 text-slate-600 text-xs font-mono font-semibold px-2 py-0.5 rounded border border-slate-200">${format}</span>
-                </div>
-                <div class="w-full sm:w-1/6 sm:text-center text-xs font-mono text-slate-500">
-                    ${size}
-                </div>
-                <div class="w-full sm:w-1/6 sm:text-right mt-1 sm:mt-0">
-                    <a href="${link}" download class="inline-block bg-white hover:bg-slate-50 text-slate-800 text-xs font-semibold px-3 py-1.5 rounded border border-slate-300 shadow-sm transition-all active:scale-[0.98]">
-                        Download
-                    </a>
-                </div>
-            `;
-            return row;
-        }
-    </script>
-</body>
-</html>
+app.listen(PORT, () => console.log(`🔒 Secure Core serving on port ${PORT}`));
