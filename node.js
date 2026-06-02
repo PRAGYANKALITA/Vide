@@ -10,12 +10,10 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Dynamic binary tracking depending on OS environment
 const ytDlpBinary = process.platform === 'win32' 
     ? path.join(__dirname, 'yt-dlp.exe') 
-    : 'yt-dlp';
+    : 'yt-dlp'; 
 
-// Ensure local temporary caching folders exist safely
 const tmpDir = path.join(__dirname, 'tmp');
 if (!fs.existsSync(tmpDir)) {
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -41,7 +39,6 @@ const apiLimiter = rateLimit({
     message: { error: 'Too many requests. Please try again later.' }
 });
 
-// Robust URL parsing logic supporting youtube.com, shorts, embeds, and youtu.be links
 const validateYoutubeUrl = (urlStr) => {
     try {
         if (!urlStr) return null;
@@ -63,7 +60,6 @@ const validateYoutubeUrl = (urlStr) => {
     }
 };
 
-// Strips system illegal characters out of titles to make safe file downloads
 const sanitizeFilename = (title) => {
     if (!title) return 'media';
     return title.replace(/[/\\?%*:|"<>]/g, '-').replace(/\s+/g, '_');
@@ -80,12 +76,20 @@ app.post('/api/info', apiLimiter, (req, res) => {
 
     const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Setup execution args dynamically depending on cookie existence
-    const infoArgs = ['--dump-json', cleanUrl];
+    // Pass User-Agent to match your browser session structure
+    const infoArgs = [
+        '--dump-json', 
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        cleanUrl
+    ];
+    
+    // Check and add cookie integration
     const cookiePath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiePath)) {
         infoArgs.unshift('--cookies', cookiePath);
-        console.log('🍪 Using cookies.txt for info extraction.');
+        console.log('🍪 cookies.txt detected! Passing session tokens to yt-dlp.');
+    } else {
+        console.log('⚠️ Warning: cookies.txt not found in directory root.');
     }
 
     const ytDlp = spawn(ytDlpBinary, infoArgs);
@@ -103,10 +107,10 @@ app.post('/api/info', apiLimiter, (req, res) => {
 
     ytDlp.on('close', (code) => {
         if (code !== 0) {
-            console.error(`yt-dlp failed with exit code ${code}`);
-            console.error(`Detailed stderr: ${stderrData}`);
-            const cleanError = stderrData.trim().split('\n').pop() || 'Unknown error fetching metadata.';
-            return res.status(500).json({ error: `YouTube Blocked Request: ${cleanError}` });
+            console.error(`yt-dlp process failed with code ${code}`);
+            console.error(`Detailed stderr logs: ${stderrData}`);
+            const cleanError = stderrData.trim().split('\n').pop() || 'Unknown error.';
+            return res.status(500).json({ error: `Extraction Failed: ${cleanError}` });
         }
         try {
             const json = JSON.parse(stdoutData);
@@ -147,28 +151,29 @@ app.get('/api/download', (req, res) => {
     const fileId = crypto.randomBytes(8).toString('hex');
     const tempOutPath = path.join(tmpDir, `download_${fileId}`);
     
-    let args = [];
+    let args = [
+        '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    ];
 
     if (type === 'mp3') {
-        args = [
+        args.push(
             '-q', '--no-warnings', 
             '-f', 'ba', 
             '-x', '--audio-format', 'mp3', 
             '--embed-thumbnail', '--convert-thumbnails', 'jpg',
             '-o', `${tempOutPath}.%(ext)s`, 
             cleanUrl
-        ];
+        );
     } else {
-        args = [
+        args.push(
             '-q', '--no-warnings', 
             '-f', `${formatId}+ba/best`, 
             '--merge-output-format', 'mp4', 
             '-o', `${tempOutPath}.%(ext)s`, 
             cleanUrl
-        ];
+        );
     }
 
-    // Safely inject cookie routing if file exists inside Render environment
     const cookiePath = path.join(__dirname, 'cookies.txt');
     if (fs.existsSync(cookiePath)) {
         args.unshift('--cookies', cookiePath);
@@ -180,9 +185,9 @@ app.get('/api/download', (req, res) => {
         const expectedFile = `${tempOutPath}.${type}`;
 
         if (code !== 0 || !fs.existsSync(expectedFile)) {
-            console.error(`Download processing failed with exit code ${code}`);
+            console.error('Download processing failed or file not found.');
             if (!res.headersSent) {
-                res.status(500).send('Error compiling or conversions failed.');
+                res.status(500).send('Error compiling media files.');
             }
             return;
         }
@@ -202,4 +207,4 @@ app.get('/api/download', (req, res) => {
     });
 });
 
-app.listen(PORT, () => console.log(`🔒 Secure Core serving on port ${PORT}`));
+app.listen(PORT, () => console.log(`🔒 Secure Core serving on http://localhost:${PORT}`));
