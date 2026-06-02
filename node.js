@@ -9,7 +9,10 @@ const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
+// Add this near the top of your server.js file
+const ytDlpBinary = process.platform === 'win32' 
+    ? path.join(__dirname, 'yt-dlp.exe') 
+    : 'yt-dlp'; // Linux will look for the globally installed package
 // Ensure local temporary caching folders exist safely
 const tmpDir = path.join(__dirname, 'tmp');
 if (!fs.existsSync(tmpDir)) {
