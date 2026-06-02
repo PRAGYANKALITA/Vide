@@ -28,4 +28,4 @@ COPY . .
 EXPOSE 3000
 
 # Fire up application execution
-CMD ["node", "server.js"]
+CMD ["node", "node.js"]
