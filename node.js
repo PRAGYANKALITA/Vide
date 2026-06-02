@@ -9,10 +9,12 @@ const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-// Add this near the top of your server.js file
+
+// Dynamic binary tracking depending on OS environment
 const ytDlpBinary = process.platform === 'win32' 
     ? path.join(__dirname, 'yt-dlp.exe') 
-    : 'yt-dlp'; // Linux will look for the globally installed package
+    : 'yt-dlp';
+
 // Ensure local temporary caching folders exist safely
 const tmpDir = path.join(__dirname, 'tmp');
 if (!fs.existsSync(tmpDir)) {
@@ -55,7 +57,6 @@ const validateYoutubeUrl = (urlStr) => {
         }
         return null;
     } catch (e) {
-        // Fallback regex if URL instantiation breaks down
         const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
         const match = urlStr.match(regex);
         return match ? match[1] : null;
@@ -78,7 +79,16 @@ app.post('/api/info', apiLimiter, (req, res) => {
     }
 
     const cleanUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const ytDlp = spawn(ytDlpBinary, ['--dump-json', cleanUrl]);
+    
+    // Setup execution args dynamically depending on cookie existence
+    const infoArgs = ['--dump-json', cleanUrl];
+    const cookiePath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiePath)) {
+        infoArgs.unshift('--cookies', cookiePath);
+        console.log('🍪 Using cookies.txt for info extraction.');
+    }
+
+    const ytDlp = spawn(ytDlpBinary, infoArgs);
     
     let stdoutData = '';
     let stderrData = '';
@@ -93,7 +103,10 @@ app.post('/api/info', apiLimiter, (req, res) => {
 
     ytDlp.on('close', (code) => {
         if (code !== 0) {
-            return res.status(500).json({ error: 'Failed to collect format structural mapping logs.' });
+            console.error(`yt-dlp failed with exit code ${code}`);
+            console.error(`Detailed stderr: ${stderrData}`);
+            const cleanError = stderrData.trim().split('\n').pop() || 'Unknown error fetching metadata.';
+            return res.status(500).json({ error: `YouTube Blocked Request: ${cleanError}` });
         }
         try {
             const json = JSON.parse(stdoutData);
@@ -137,7 +150,6 @@ app.get('/api/download', (req, res) => {
     let args = [];
 
     if (type === 'mp3') {
-        // -x extracts audio, --embed-thumbnail adds image, --convert-thumbnails maps it correctly
         args = [
             '-q', '--no-warnings', 
             '-f', 'ba', 
@@ -147,7 +159,6 @@ app.get('/api/download', (req, res) => {
             cleanUrl
         ];
     } else {
-        // Video merges highest track audio with format selections
         args = [
             '-q', '--no-warnings', 
             '-f', `${formatId}+ba/best`, 
@@ -157,26 +168,29 @@ app.get('/api/download', (req, res) => {
         ];
     }
 
+    // Safely inject cookie routing if file exists inside Render environment
+    const cookiePath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiePath)) {
+        args.unshift('--cookies', cookiePath);
+    }
+
     const downloader = spawn(ytDlpBinary, args);
 
     downloader.on('close', (code) => {
         const expectedFile = `${tempOutPath}.${type}`;
 
         if (code !== 0 || !fs.existsSync(expectedFile)) {
-            console.error('Download processing failed or file not found.');
+            console.error(`Download processing failed with exit code ${code}`);
             if (!res.headersSent) {
-                res.status(500).send('Error compiling media files. Check console environment context.');
+                res.status(500).send('Error compiling or conversions failed.');
             }
             return;
         }
 
-        // Apply clean filename mapping context requested by client
         const secureTitleName = sanitizeFilename(title);
         const finalClientFilename = `VIDE_${secureTitleName}.${type}`;
 
-        // Stream the completed file safely back to the user
         res.download(expectedFile, finalClientFilename, (err) => {
-            // Clean up files asynchronously on disk post-transfer
             fs.unlink(expectedFile, (unlinkErr) => {
                 if (unlinkErr) console.error('Error removing temporary cached item:', unlinkErr);
             });
@@ -188,4 +202,4 @@ app.get('/api/download', (req, res) => {
     });
 });
 
-app.listen(PORT, () => console.log(`🔒 Secure Core serving on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🔒 Secure Core serving on port ${PORT}`));
